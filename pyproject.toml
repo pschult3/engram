@@ -1,0 +1,27 @@
+[project]
+name = "engram"
+version = "0.2.0"
+description = "Hybrid memory system for Claude Code: MCP server + hooks + local SQLite store"
+requires-python = ">=3.10"
+authors = [{ name = "Patrick Schulte" }]
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.6",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+vector = ["sqlite-vec>=0.1.6", "fastembed>=0.4"]
+
+[project.scripts]
+engram = "engram.cli.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engram"]

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "engram": {
+      "command": "engram",
+      "args": ["mcp", "serve"],
+      "env": {
+        "ENGRAM_HOME": "${HOME}/.engram",
+        "ENGRAM_PROJECT": "${PWD}"
+      }
+    }
+  }
+}
