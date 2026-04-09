@@ -712,6 +712,22 @@ class Store:
                 (ended_at, summary, session_id),
             )
 
+    # ---------- tag-based lookup ----------
+
+    def find_by_tag(self, tag: str, limit: int = 5) -> list[MemoryUnit]:
+        """Return active units whose tags JSON array contains *tag*."""
+        rows = self.conn.execute(
+            """SELECT mu.*
+               FROM memory_units mu, json_each(mu.tags) je
+               WHERE mu.project = ?
+                 AND je.value = ?
+                 AND (mu.valid_to IS NULL OR mu.valid_to > ?)
+               ORDER BY mu.created_at DESC
+               LIMIT ?""",
+            (self.project, tag, self._now_iso(), limit),
+        ).fetchall()
+        return [self._row_to_unit(r) for r in rows]
+
     # ---------- helpers ----------
 
     @staticmethod

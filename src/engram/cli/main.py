@@ -24,6 +24,7 @@ from .. import __version__
 from ..config import load_config
 from ..digest import build_bootstrap_capsule
 from ..hooks import (
+    handle_pre_compact,
     handle_post_compact,
     handle_post_tool_use,
     handle_session_end,
@@ -80,6 +81,13 @@ def _h_user_prompt_submit() -> None:
 @hook.command("post-tool-use")
 def _h_post_tool_use() -> None:
     click.echo(json.dumps(handle_post_tool_use()))
+
+
+@hook.command("pre-compact")
+def _h_pre_compact() -> None:
+    out = handle_pre_compact()
+    if out:
+        click.echo(out)
 
 
 @hook.command("post-compact")
