@@ -1,11 +1,26 @@
 # engram
 
-> A small, local-first memory system for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview).
-> Typed memory units in SQLite, queue-based async writes, hybrid semantic + lexical search,
-> and graph-linked retrieval — exposed via a stdio MCP server and Claude Code hooks.
+**Give Claude Code a memory that actually works.**
+
+> "What was the margin formula again?" "Didn't we fix that join last week?" "Which files did I change for the auth migration?"
+>
+> You know the answers. Claude doesn't. Every session starts from zero.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](#license)
+
+```
+Without engram                          With engram
+──────────────                          ──────────────
+Session 1: "Analyze margins per SKU"    Session 1: "Analyze margins per SKU"
+  → builds query, finds formula           → builds query, finds formula
+  → discovers HSA32 is a loss-maker       → discovers HSA32 is a loss-maker
+
+Session 2: "Continue the analysis"      Session 2: "Continue the analysis"
+  → "What analysis?"                      → knows: HSA32 loss-maker, formula,
+  → re-explain everything                    which files changed, what's pending
+  → waste 10 minutes of context           → picks up where you left off
+```
 
 ---
 
@@ -16,12 +31,14 @@ Claude Code is great in a single session and forgets almost everything between t
 `engram` takes a different shape:
 
 1. **One canonical store, three retrieval layers.** Typed memory units in SQLite, with FTS5 lexical search, optional vector similarity via `sqlite-vec`, and graph-linked expansion via rule-derived edges.
-2. **Hooks own the write path.** PostToolUse appends to a JSONL queue in sub-millisecond time and never touches SQLite. SessionStart / UserPromptSubmit / PostCompact / SessionEnd drain the queue.
-3. **MCP owns the read path.** A small, coarse tool surface (`memory_search`, `memory_get`, `memory_bootstrap`, `memory_related`, …) plus pinnable resources.
+2. **Hooks own the write path.** PostToolUse appends to a JSONL queue in sub-millisecond time and never touches SQLite. PreCompact / PostCompact / SessionEnd drain the queue and persist structured summaries.
+3. **MCP owns the read path.** A small, coarse tool surface (`memory_search`, `memory_get`, `memory_bootstrap`, `memory_related`, ...) plus pinnable resources.
 4. **Tiny digests, never global wikis.** SessionStart injects a hard-capped capsule (default ~400 tokens, configurable per-project) of decisions / open questions / preferences / incidents — nothing else.
 5. **Deterministic extraction first.** File edits, test failures, and meaningful shell commands are captured by rule-based parsers. No LLM calls in the hot path.
-6. **Active invalidation, not just expiry.** When a new decision or preference overlaps an older one (shared files or tags), the older unit is superseded — not deleted — so the capsule never shows contradictory "active" entries.
-7. **Secrets never reach disk.** The noise gate drops events that touch `.env`, `*.pem`, `.ssh/**`, `.aws/**`, and redacts AWS / GitHub / OpenAI / Anthropic / Slack / JWT patterns in command payloads before anything is written to the queue.
+6. **Self-optimizing summaries.** PreCompact injects formatting rules; Claude structures its own summaries with `[DONE]`/`[DISCUSSED]` markers. A built-in feedback loop lets summary quality improve across sessions — automatically.
+7. **Active invalidation, not just expiry.** When a new decision or preference overlaps an older one (shared files or tags), the older unit is superseded — not deleted — so the capsule never shows contradictory "active" entries.
+8. **Secrets never reach disk.** The noise gate drops events that touch `.env`, `*.pem`, `.ssh/**`, `.aws/**`, and redacts AWS / GitHub / OpenAI / Anthropic / Slack / JWT patterns in command payloads before anything is written to the queue.
+9. **Nothing leaves your machine.** Local SQLite, local queue, local search. Zero cloud dependencies.
 
 ---
 
@@ -155,6 +172,9 @@ the repo as `.claude/settings.json` (or merge):
         "hooks": [{ "type": "command", "command": "engram hook post-tool-use" }]
       }
     ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "engram hook pre-compact" }] }
+    ],
     "PostCompact": [
       { "hooks": [{ "type": "command", "command": "engram hook post-compact" }] }
     ],
@@ -188,9 +208,38 @@ engram doctor            # paths, queue depth, vec/graph state
    - `Bash git/npm/pnpm/cargo/…` → `command` event; failures become incidents.
    - `ls`, `cd`, `cat`, `grep`, `Read`, … → dropped silently.
    - New units are embedded (if vec is enabled) and linked to related units via graph edges.
-5. **PostCompact** / **SessionEnd** → drain, then persist Claude's `compact_summary` as a `session_summary` unit.
+5. **PreCompact** → inject compact formatting instructions as `additionalContext`. Instructs Claude to use `[DONE]`/`[DISCUSSED]` markers, stay under 800 words, and skip XML wrapping. If past `[FEEDBACK]` units exist, they are appended so Claude can self-correct summary quality over time.
+6. **PostCompact** → drain, then persist Claude's `compact_summary` as a `session_summary` unit. If the summary contains a `[FEEDBACK]` section, it is extracted and stored as a separate `lesson` unit (tag: `memory_feedback`) — kept out of the summary itself.
+7. **SessionEnd** → drain + persist. If no `compact_summary` is available (session ended without `/compact`), falls back to reading the JSONL transcript at `transcript_path` and extracting a deterministic summary from the first and last user messages.
 
 On drain, every new `decision` / `preference` / `open_question` runs through the supersession check: if it shares **≥ 2 file paths** or **≥ 3 tags** with an older active unit of the same type, the older unit's `valid_to` is set to the new unit's `created_at` and a `supersedes` edge is recorded. The old unit stays in the database but disappears from the bootstrap capsule and default searches.
+
+### Self-optimizing feedback loop
+
+engram improves its own summary quality over time through a built-in feedback loop:
+
+```
+Session N                              Session N+1
+─────────                              ───────────
+PreCompact                             PreCompact
+  │ inject rules + past feedback         │ inject rules + UPDATED feedback
+  ▼                                      ▼
+Claude writes summary                  Claude writes better summary
+  │ optionally appends [FEEDBACK]        │ (applies learned lessons)
+  ▼                                      ▼
+PostCompact                            PostCompact
+  ├─ summary → session_summary           ├─ summary → session_summary
+  └─ [FEEDBACK] → lesson unit            └─ ...
+       │
+       └──── persisted, read by ────────────┘
+             next PreCompact
+```
+
+**How it works:**
+- PreCompact injects formatting rules (`[DONE]`/`[DISCUSSED]` markers, word limits, no XML tags) plus any past feedback from `lesson` units tagged `memory_feedback`.
+- If Claude notices that retrieved memories were unhelpful (too verbose, missing file paths, hypotheticals presented as facts), it *may* append a `[FEEDBACK]` section — but only when there's a genuine quality issue.
+- PostCompact strips the feedback from the summary and stores it as a separate `lesson` unit. Next session's PreCompact reads it and adjusts instructions.
+- The loop converges: after a few sessions, summaries stabilize around the quality level the user needs.
 
 ---
 
@@ -278,6 +327,7 @@ engram config set KEY VALUE              # write a per-project setting
 engram hook session-start                # hook handlers (read JSON on stdin)
 engram hook user-prompt-submit
 engram hook post-tool-use
+engram hook pre-compact
 engram hook post-compact
 engram hook session-end
 ```
@@ -337,6 +387,7 @@ engram/
 │  │   ├─ tools.py         # tool-call → event filter (the noise gate)
 │  │   ├─ redact.py        # path denylist + secret-pattern redaction
 │  │   ├─ extractor.py     # event → typed memory unit
+│  │   ├─ transcript.py    # JSONL transcript → deterministic summary (SessionEnd fallback)
 │  │   ├─ edges.py         # unit → rule-derived graph edges
 │  │   ├─ supersede.py     # invalidate older units shadowed by new ones
 │  │   └─ drain.py         # queue → store + embeddings + edges + supersede
@@ -349,7 +400,7 @@ engram/
 │  ├─ mcp/
 │  │   └─ server.py        # FastMCP stdio server (tools + resources)
 │  ├─ hooks/
-│  │   └─ handlers.py      # SessionStart / UserPromptSubmit / ... handlers
+│  │   └─ handlers.py      # SessionStart / UserPromptSubmit / PreCompact / PostCompact / SessionEnd
 │  └─ cli/
 │      └─ main.py          # `engram` console script
 ├─ templates/
@@ -359,6 +410,8 @@ engram/
    ├─ test_storage.py
    ├─ test_queue.py
    ├─ test_extractor.py
+   ├─ test_transcript.py       # transcript parser + summarize_session integration
+   ├─ test_feedback_loop.py    # feedback extraction, find_by_tag, round-trip
    ├─ test_drain.py
    ├─ test_embeddings.py
    ├─ test_hybrid_search.py
@@ -378,19 +431,21 @@ uv sync --extra dev    # or: pip install -e ".[dev]"
 pytest -q
 ```
 
-The full test suite runs in well under a second without any ML dependencies (stub embedder, no sqlite-vec required).
+The full test suite (139 tests) runs in under a second without any ML dependencies (stub embedder, no sqlite-vec required).
 
 ---
 
 ## Design notes
 
 - **SQLite + FTS5** is the floor, not the ceiling. It's zero-setup, WAL-safe, backed up by copying one file.
-- **The queue exists because PostToolUse runs on every tool call.** Cold-starting Python plus opening SQLite per call is ~80–150 ms. Multiplied by 50 edits a session, that's noticeable. Appending one JSONL line is sub-millisecond.
+- **The queue exists because PostToolUse runs on every tool call.** Cold-starting Python plus opening SQLite per call is ~80-150 ms. Multiplied by 50 edits a session, that's noticeable. Appending one JSONL line is sub-millisecond.
 - **`code_change` has a TTL on purpose.** It's telemetry, not knowledge. Decisions, incidents, and lessons are forever; routine edits expire.
-- **Supersession is conservative on purpose.** The thresholds (≥ 2 shared files or ≥ 3 shared tags) start strict so the capsule never silently loses a still-relevant entry. Tune them down once you have enough real data to trust the signal.
+- **Summaries are Claude's job, structure is engram's.** PreCompact tells Claude *how* to write summaries (`[DONE]`/`[DISCUSSED]`, no XML, word limits). PostCompact strips feedback and stores it separately. Claude writes better each time without anyone touching a prompt template.
+- **Supersession is conservative on purpose.** The thresholds (>= 2 shared files or >= 3 shared tags) start strict so the capsule never silently loses a still-relevant entry. Tune them down once you have enough real data to trust the signal.
 - **Vector search degrades gracefully.** If `sqlite-vec` is not installed or extension loading is disabled, `memory_search` falls back to FTS5-only. No configuration change needed.
-- **Graph expansion uses a 0.5× score penalty** so direct search hits always outrank graph-expanded neighbours of equal similarity.
-- **Project keys are stable across `cd`** but distinct across repos with the same name in different paths. Moving a repo creates a new namespace by design — moves often change context.
+- **Graph expansion uses a 0.5x score penalty** so direct search hits always outrank graph-expanded neighbours of equal similarity.
+- **SessionEnd is never empty.** Even if the user quits without `/compact`, engram reads the JSONL transcript and extracts a deterministic summary from the first and last user messages. Not as rich as a Claude-generated summary, but always better than nothing.
+- **Project keys are stable across `cd`** but distinct across repos with the same name in different paths. Moving a repo creates a new namespace by design — moves often change context. Override with `ENGRAM_PROJECT` (e.g., via direnv) to share a store across a workspace with multiple repos.
 
 ---
 
