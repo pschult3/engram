@@ -14,10 +14,12 @@ from ..storage import Store
 from ..storage.models import MemoryType
 
 _CAPSULE_TYPES = [
+    MemoryType.fact,
     MemoryType.decision,
     MemoryType.open_question,
     MemoryType.preference,
     MemoryType.incident,
+    MemoryType.lesson,
 ]
 
 _DEFAULT_MAX_TOKENS = 400

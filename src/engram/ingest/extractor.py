@@ -115,6 +115,47 @@ def extract_units_from_event(event: Event) -> list[MemoryUnit]:
             )
         ]
 
+    if t == "incident":
+        return [
+            MemoryUnit(
+                id=_uid(),
+                project=event.project,
+                type=MemoryType.incident,
+                title=p.get("title", "incident"),
+                body=p.get("body", ""),
+                tags=p.get("tags", []) or ["incident"],
+                source_refs=[f"event:{event.id}"],
+                confidence=0.7,
+            )
+        ]
+
+    if t == "preference":
+        return [
+            MemoryUnit(
+                id=_uid(),
+                project=event.project,
+                type=MemoryType.preference,
+                title=p.get("title", "preference"),
+                body=p.get("body", ""),
+                tags=p.get("tags", []) or ["preference"],
+                source_refs=[f"event:{event.id}"],
+            )
+        ]
+
+    if t == "lesson":
+        return [
+            MemoryUnit(
+                id=_uid(),
+                project=event.project,
+                type=MemoryType.lesson,
+                title=p.get("title", "lesson"),
+                body=p.get("body", ""),
+                tags=p.get("tags", []) or ["lesson"],
+                source_refs=[f"event:{event.id}"],
+                confidence=0.6,
+            )
+        ]
+
     return []
 
 
