@@ -159,6 +159,20 @@ def extract_units_from_event(event: Event) -> list[MemoryUnit]:
     return []
 
 
+def _clean_summary(text: str) -> str:
+    """Strip Claude internal XML and analysis tags from compact summaries."""
+    import re
+    # Remove <analysis>...</analysis> blocks (Claude's internal thinking)
+    text = re.sub(r'<analysis>.*?</analysis>', '', text, flags=re.DOTALL)
+    # Remove Claude Code system tags
+    for tag in ('system-reminder', 'command-name', 'command-message',
+                'command-args', 'local-command-stdout', 'local-command-caveat'):
+        text = re.sub(rf'<{tag}>.*?</{tag}>', '', text, flags=re.DOTALL)
+    # Collapse excessive whitespace
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
+
+
 def summarize_session(
     project: str,
     session_id: str,
@@ -167,8 +181,8 @@ def summarize_session(
 ) -> MemoryUnit | None:
     """Build a single session_summary unit from raw events.
 
-    If Claude Code passed us a compact_summary (from PostCompact), we keep it
-    verbatim — it is already a good condensed view. Otherwise we fall back to
+    If Claude Code passed us a compact_summary (from PostCompact), we clean it
+    (strip internal XML/analysis tags) and store it. Otherwise we fall back to
     a deterministic event-count summary.
     """
     events = list(events)
@@ -176,6 +190,7 @@ def summarize_session(
         return None
 
     if compact_summary:
+        compact_summary = _clean_summary(compact_summary)
         body = compact_summary.strip()
     else:
         counts: dict[str, int] = {}

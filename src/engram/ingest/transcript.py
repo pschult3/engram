@@ -17,14 +17,18 @@ _MAX_BODY_CHARS = 2000
 
 
 def _extract_user_text(obj: dict) -> str | None:
-    """Pull plain text from a user-type transcript line."""
+    """Pull plain text from a user-type transcript line.
+
+    Filters out slash commands (/exit, /model, etc.) and system XML tags
+    that are not meaningful session content.
+    """
     if obj.get("type") != "user":
         return None
     msg = obj.get("message", {})
     content = msg.get("content", [])
     if isinstance(content, str):
-        return content.strip() or None
-    if isinstance(content, list):
+        text = content.strip()
+    elif isinstance(content, list):
         parts = []
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
@@ -32,8 +36,19 @@ def _extract_user_text(obj: dict) -> str | None:
             elif isinstance(block, str):
                 parts.append(block)
         text = " ".join(parts).strip()
-        return text or None
-    return None
+    else:
+        return None
+
+    if not text:
+        return None
+
+    # Skip slash commands and system artifacts
+    if text.startswith("/") or text.startswith("<command-name>"):
+        return None
+    if "<local-command" in text or "<system-reminder>" in text:
+        return None
+
+    return text
 
 
 def summary_from_transcript(path: str | Path, max_body: int = _MAX_BODY_CHARS) -> str | None:

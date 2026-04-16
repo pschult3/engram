@@ -30,8 +30,8 @@ TYPE_WEIGHTS: dict[MemoryType, float] = {
     MemoryType.incident: 0.8,
     MemoryType.task: 0.75,
     MemoryType.entity_relation: 0.7,
-    MemoryType.session_summary: 0.5,
-    MemoryType.code_change: 0.4,
+    MemoryType.session_summary: 0.15,
+    MemoryType.code_change: 0.0,
 }
 
 
