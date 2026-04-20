@@ -146,7 +146,22 @@ commands executed) from what was only DISCUSSED (ideas, plans, hypotheticals).
 7. If memories retrieved earlier in this session were misleading, too verbose, \
 or missing critical info, you MAY append a [FEEDBACK] section (1-3 bullets) \
 describing what future summaries should do differently. Only add feedback when \
-there is a genuine quality issue — do NOT force it.\
+there is a genuine quality issue — do NOT force it.
+8. If the session produced VERIFIED facts, decisions, incidents, or preferences, \
+append structured blocks AFTER the main summary. Only include information backed \
+by: user confirmation, BQ query result, Looker metadata, or external docs. \
+Skip types where nothing verified happened. One block per paragraph, blank line \
+between blocks. Exact format:
+
+[FACT] title: <short name>
+body: <2-3 sentences ending with "Verified: [source]">
+tags: tag1, tag2
+
+[DECISION] title: <decision name>
+body: <2-3 sentences ending with "Verified: [source]">
+tags: tag1, tag2
+
+Same format for [INCIDENT] and [PREFERENCE]. If nothing verified → omit entirely.\
 """
 
 _FEEDBACK_TAG = "memory_feedback"
@@ -205,6 +220,72 @@ def _strip_feedback(text: str | None) -> str | None:
     return re.sub(r"\[FEEDBACK\]\s*\n?.*", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
 
 
+_STRUCTURED_TYPES = {
+    "FACT": MemoryType.fact,
+    "DECISION": MemoryType.decision,
+    "INCIDENT": MemoryType.incident,
+    "PREFERENCE": MemoryType.preference,
+}
+
+_STRUCTURED_BLOCK_RE = re.compile(
+    r"^\s*\[(FACT|DECISION|INCIDENT|PREFERENCE)\]\s*"
+    r"title:\s*([^\n]+)\s*\n"
+    r"body:\s*(.+?)"
+    r"(?:\s*\ntags:\s*(.+?))?"
+    r"\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
+
+_STRUCTURED_MARKER_RE = re.compile(
+    r"^\s*\[(?:FACT|DECISION|INCIDENT|PREFERENCE)\]",
+    re.IGNORECASE,
+)
+
+
+def _extract_structured_units(
+    text: str | None,
+    project: str,
+    session_id: str,
+) -> list[MemoryUnit]:
+    """Extract [FACT]/[DECISION]/[INCIDENT]/[PREFERENCE] blocks as units."""
+    if not text:
+        return []
+    units: list[MemoryUnit] = []
+    for para in re.split(r"\n\s*\n", text):
+        m = _STRUCTURED_BLOCK_RE.match(para)
+        if not m:
+            continue
+        type_str = m.group(1).upper()
+        title = m.group(2).strip()
+        body = m.group(3).strip()
+        tags_str = (m.group(4) or "").strip().strip("[]")
+        tags = [t.strip() for t in tags_str.split(",") if t.strip()]
+        memory_type = _STRUCTURED_TYPES[type_str]
+        if memory_type.value not in tags:
+            tags.insert(0, memory_type.value)
+        units.append(
+            MemoryUnit(
+                id=uuid.uuid4().hex[:12],
+                project=project,
+                type=memory_type,
+                title=title[:120],
+                body=body,
+                tags=tags,
+                source_refs=[f"session:{session_id}"],
+                confidence=0.8,
+            )
+        )
+    return units
+
+
+def _strip_structured_units(text: str | None) -> str | None:
+    """Return the summary without [FACT]/[DECISION]/[INCIDENT]/[PREFERENCE] blocks."""
+    if not text:
+        return text
+    kept = [p for p in re.split(r"\n\s*\n", text) if not _STRUCTURED_MARKER_RE.match(p)]
+    return "\n\n".join(kept).strip()
+
+
 def handle_post_compact() -> dict[str, Any]:
     payload = _read_payload()
     session_id = payload.get("session_id") or payload.get("sessionId") or "unknown"
@@ -214,14 +295,20 @@ def handle_post_compact() -> dict[str, Any]:
         drain_stats = drain_queue(store, queue)
         events = store.unprocessed_events(limit=1000)
 
-        # Extract and store feedback separately, keep it out of the summary.
-        feedback = _extract_feedback(summary)
-        clean_summary = _strip_feedback(summary)
+        # Extract structured units, feedback, and clean summary.
+        structured = _extract_structured_units(summary, store.project, session_id)
+        summary_no_structured = _strip_structured_units(summary)
+        feedback = _extract_feedback(summary_no_structured)
+        clean_summary = _strip_feedback(summary_no_structured)
 
         unit = summarize_session(store.project, session_id, events, compact_summary=clean_summary)
         created = drain_stats["memory_units_created"]
         if unit:
             _, was_new = store.upsert_memory(unit)
+            created += int(was_new)
+
+        for su in structured:
+            _, was_new = store.upsert_memory(su)
             created += int(was_new)
 
         if feedback:
@@ -259,14 +346,20 @@ def handle_session_end() -> dict[str, Any]:
         if not summary and not events and transcript_path:
             summary = summary_from_transcript(transcript_path)
 
-        # Extract feedback (if summary was LLM-generated and contains it).
-        feedback = _extract_feedback(summary)
-        clean_summary = _strip_feedback(summary)
+        # Extract structured units, feedback, and clean summary.
+        structured = _extract_structured_units(summary, store.project, session_id)
+        summary_no_structured = _strip_structured_units(summary)
+        feedback = _extract_feedback(summary_no_structured)
+        clean_summary = _strip_feedback(summary_no_structured)
 
         unit = summarize_session(store.project, session_id, events, compact_summary=clean_summary)
         created = drain_stats["memory_units_created"]
         if unit:
             _, was_new = store.upsert_memory(unit)
+            created += int(was_new)
+
+        for su in structured:
+            _, was_new = store.upsert_memory(su)
             created += int(was_new)
 
         if feedback:
