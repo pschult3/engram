@@ -168,6 +168,9 @@ def _clean_summary(text: str) -> str:
     for tag in ('system-reminder', 'command-name', 'command-message',
                 'command-args', 'local-command-stdout', 'local-command-caveat'):
         text = re.sub(rf'<{tag}>.*?</{tag}>', '', text, flags=re.DOTALL)
+    # Strip any remaining stray <summary>/<analysis> open/close tags that
+    # weren't part of a well-formed pair (otherwise they leak into the body).
+    text = re.sub(r'</?\s*(summary|analysis)[^>]*>', '', text, flags=re.IGNORECASE)
     # Collapse excessive whitespace
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text

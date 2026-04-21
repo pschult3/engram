@@ -318,6 +318,29 @@ class Store:
             ).fetchone()
             if row:
                 return self._row_to_unit(row), False
+
+            # Session-summary idempotency: each session has at most one active
+            # summary. Retire prior active rows that carry the same
+            # "session:<id>" source_ref before inserting the new one. Without
+            # this, every SessionEnd/PostCompact in the same session produces
+            # a distinct row (checksum differs by body) and retrieval gets
+            # dominated by near-duplicate summaries.
+            if unit.type == MemoryType.session_summary:
+                session_ref = next(
+                    (r for r in unit.source_refs if r.startswith("session:")),
+                    None,
+                )
+                if session_ref:
+                    c.execute(
+                        """UPDATE memory_units SET valid_to=?
+                           WHERE project=? AND type=?
+                             AND (valid_to IS NULL OR valid_to > ?)
+                             AND EXISTS (
+                               SELECT 1 FROM json_each(memory_units.source_refs) je
+                               WHERE je.value = ?
+                             )""",
+                        (now_iso, unit.project, unit.type.value, now_iso, session_ref),
+                    )
             cur = c.execute(
                 """INSERT INTO memory_units
                    (id, project, type, title, body, tags, file_paths, source_refs,

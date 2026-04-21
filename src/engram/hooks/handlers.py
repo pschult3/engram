@@ -202,14 +202,33 @@ def handle_pre_compact() -> str:
 
 # --------------------------- PostCompact ---------------------------
 
+_FEEDBACK_RE = re.compile(
+    r"\[FEEDBACK\]\s*\n?(.*?)"
+    r"(?=\n\s*##|\n\s*\[(?:FACT|DECISION|INCIDENT|PREFERENCE)\]|\n\s*</\s*summary\s*>|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+_FEEDBACK_STRIP_RE = re.compile(
+    r"\[FEEDBACK\]\s*\n?.*?"
+    r"(?=\n\s*##|\n\s*\[(?:FACT|DECISION|INCIDENT|PREFERENCE)\]|\n\s*</\s*summary\s*>|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
 def _extract_feedback(text: str | None) -> str | None:
-    """Extract an optional [FEEDBACK] section from a compact summary."""
+    """Extract an optional [FEEDBACK] section from a compact summary.
+
+    Bounded by the next section marker (## header, structured block,
+    </summary>, or end-of-text). Without a boundary the regex greedy-eats
+    trailing content like file lists into the lesson body.
+    """
     if not text:
         return None
-    m = re.search(r"\[FEEDBACK\]\s*\n?(.*)", text, re.DOTALL | re.IGNORECASE)
+    m = _FEEDBACK_RE.search(text)
     if not m:
         return None
     body = m.group(1).strip()
+    body = re.sub(r"</?\s*summary[^>]*>\s*$", "", body, flags=re.IGNORECASE).strip()
     return body if body else None
 
 
@@ -217,7 +236,7 @@ def _strip_feedback(text: str | None) -> str | None:
     """Return the summary without the [FEEDBACK] section."""
     if not text:
         return text
-    return re.sub(r"\[FEEDBACK\]\s*\n?.*", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    return _FEEDBACK_STRIP_RE.sub("", text).strip()
 
 
 _STRUCTURED_TYPES = {
@@ -286,6 +305,34 @@ def _strip_structured_units(text: str | None) -> str | None:
     return "\n\n".join(kept).strip()
 
 
+_SIGNAL_MARKER_RE = re.compile(
+    r"\[(?:DONE|DISCUSSED|FACT|DECISION|INCIDENT|PREFERENCE)\]",
+    re.IGNORECASE,
+)
+_MIN_SESSION_SUMMARY_CHARS = 120
+
+
+def _is_low_signal_summary(body: str | None) -> bool:
+    """True if the session_summary body is garbage / prompt-echo only.
+
+    Drops two noise classes:
+      1. Too-short bodies (less than _MIN_SESSION_SUMMARY_CHARS chars),
+         e.g. "Session topic: eit".
+      2. Transcript-fallback echoes: contain "Recent[" (user prompts) but
+         no [DONE]/[DISCUSSED]/[FACT]/[DECISION] marker, meaning the session
+         ended without compaction and we are about to persist just the
+         user's questions. Those hurt retrieval more than they help.
+    """
+    if not body:
+        return True
+    b = body.strip()
+    if len(b) < _MIN_SESSION_SUMMARY_CHARS:
+        return True
+    if "Recent[" in b and not _SIGNAL_MARKER_RE.search(b):
+        return True
+    return False
+
+
 def handle_post_compact() -> dict[str, Any]:
     payload = _read_payload()
     session_id = payload.get("session_id") or payload.get("sessionId") or "unknown"
@@ -303,7 +350,7 @@ def handle_post_compact() -> dict[str, Any]:
 
         unit = summarize_session(store.project, session_id, events, compact_summary=clean_summary)
         created = drain_stats["memory_units_created"]
-        if unit:
+        if unit and not _is_low_signal_summary(unit.body):
             _, was_new = store.upsert_memory(unit)
             created += int(was_new)
 
@@ -354,7 +401,7 @@ def handle_session_end() -> dict[str, Any]:
 
         unit = summarize_session(store.project, session_id, events, compact_summary=clean_summary)
         created = drain_stats["memory_units_created"]
-        if unit:
+        if unit and not _is_low_signal_summary(unit.body):
             _, was_new = store.upsert_memory(unit)
             created += int(was_new)
 

@@ -35,6 +35,31 @@ TYPE_WEIGHTS: dict[MemoryType, float] = {
 }
 
 
+def _cap_per_type(
+    scored: list[tuple[MemoryUnit, float]],
+    top_k: int,
+    caps: dict[MemoryType, int],
+) -> list[tuple[MemoryUnit, float]]:
+    """Pick the top_k highest-scoring units, capping how many of each
+    (typically-noisy) type may appear.
+
+    Prevents a single flood-prone type (session_summary) from taking every
+    slot when the query happens to match only that type — at the cost of
+    dropping a few high-scoring duplicates.
+    """
+    out: list[tuple[MemoryUnit, float]] = []
+    counts: dict[MemoryType, int] = {}
+    for unit, score in scored:
+        limit = caps.get(unit.type)
+        if limit is not None and counts.get(unit.type, 0) >= limit:
+            continue
+        out.append((unit, score))
+        counts[unit.type] = counts.get(unit.type, 0) + 1
+        if len(out) >= top_k:
+            break
+    return out
+
+
 # ---------------------------------------------------------------------------
 # RRF fusion
 # ---------------------------------------------------------------------------
@@ -117,7 +142,7 @@ def search_memory(
         weighted.append((unit, fused_score * tw))
 
     weighted.sort(key=lambda x: x[1], reverse=True)
-    top = weighted[:top_k]
+    top = _cap_per_type(weighted, top_k, caps={MemoryType.session_summary: 2})
 
     # --- step 5: graph expansion ---
     try:
