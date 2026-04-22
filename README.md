@@ -209,7 +209,12 @@ engram doctor            # paths, queue depth, vec/graph state
    - `ls`, `cd`, `cat`, `grep`, `Read`, … → dropped silently.
    - New units are embedded (if vec is enabled) and linked to related units via graph edges.
 5. **PreCompact** → inject compact formatting instructions as `additionalContext`. Instructs Claude to use `[DONE]`/`[DISCUSSED]` markers, stay under 800 words, and skip XML wrapping. If past `[FEEDBACK]` units exist, they are appended so Claude can self-correct summary quality over time.
-6. **PostCompact** → drain, then persist Claude's `compact_summary` as a `session_summary` unit. If the summary contains a `[FEEDBACK]` section, it is extracted and stored as a separate `lesson` unit (tag: `memory_feedback`) — kept out of the summary itself.
+6. **PostCompact** → drain, then persist Claude's `compact_summary` as a `session_summary` unit. Three guards run on the way in:
+   - **Low-signal drop** — bodies under 120 chars or prompt-echo-only payloads (no `[DONE]` / `[DISCUSSED]` / `[FACT]` / `[DECISION]` / `[INCIDENT]` / `[PREFERENCE]` marker) are silently discarded instead of stored.
+   - **XML sanitization** — stray `<summary>` / `<analysis>` tags are stripped before insert (defense-in-depth; Claude sometimes leaks its internal XML into compact bodies).
+   - **Session idempotency** — if an active `session_summary` already exists for this `session:<id>`, its `valid_to` is set to `now` and the new row becomes the one active summary. At most one active summary per session, ever.
+
+   If the summary contains a `[FEEDBACK]` section, it is extracted (bounded regex — stops at the next `## `/`[FACT]`/`[DECISION]`/... header so file lists never bleed in) and stored as a separate `lesson` unit (tag: `memory_feedback`) — kept out of the summary itself.
 7. **SessionEnd** → drain + persist. If no `compact_summary` is available (session ended without `/compact`), falls back to reading the JSONL transcript at `transcript_path` and extracting a deterministic summary from the first and last user messages.
 
 On drain, every new `decision` / `preference` / `open_question` runs through the supersession check: if it shares **≥ 2 file paths** or **≥ 3 tags** with an older active unit of the same type, the older unit's `valid_to` is set to the new unit's `created_at` and a `supersedes` edge is recorded. The old unit stays in the database but disappears from the bootstrap capsule and default searches.
@@ -268,6 +273,15 @@ Patterns are **hardcoded** — no user configuration — to keep the security su
 3. **Graph expansion** — top seed results are expanded one hop along the relation graph. Directly connected units are appended with a small score penalty.
 
 Results are re-ranked by memory type: `decision` and `incident` units outrank routine `code_change` entries for the same query.
+
+**Per-type diversity cap.** After re-ranking, a per-type cap is applied to the final top-k. By default, `session_summary` is capped at 2 per query — meta-queries ("what did we do last session?") would otherwise flood the results with echo summaries and starve the real knowledge below them. Any type can be capped; the default table is:
+
+| Type | Cap in top-k |
+| --- | --- |
+| `session_summary` | 2 |
+| _(others)_ | uncapped |
+
+The cap is applied *after* type-weight reranking, so high-scoring units still win their slots — the cap just prevents a single type from taking all of them.
 
 ### Graph edges
 
@@ -446,6 +460,9 @@ The full test suite (139 tests) runs in under a second without any ML dependenci
 - **Graph expansion uses a 0.5x score penalty** so direct search hits always outrank graph-expanded neighbours of equal similarity.
 - **SessionEnd is never empty.** Even if the user quits without `/compact`, engram reads the JSONL transcript and extracts a deterministic summary from the first and last user messages. Not as rich as a Claude-generated summary, but always better than nothing.
 - **Project keys are stable across `cd`** but distinct across repos with the same name in different paths. Moving a repo creates a new namespace by design — moves often change context. Override with `ENGRAM_PROJECT` (e.g., via direnv) to share a store across a workspace with multiple repos.
+- **Quality gate at the write path, not the read path.** Low-signal compact bodies (< 120 chars or prompt-echo-only) are dropped at ingest — they never reach SQLite. Filtering at read-time would be cheaper to ship but costs retrieval quality forever, because noise still gets ranked.
+- **Session-summary idempotency is enforced in SQL, not Python.** `upsert_memory` runs a `json_each(source_refs)` EXISTS subquery before insert to retire any prior active summary carrying the same `session:<id>` ref. The retired row stays (audit trail via `valid_to`), but the bootstrap capsule and default search never show two summaries for one session.
+- **Soft-delete over hard-delete.** Cleanup — whether automatic (supersede, idempotency) or manual (audit scripts) — sets `valid_to`. Rows are never removed. The entire supersede chain stays queryable for provenance; the active view is a window, not a state.
 
 ---
 
