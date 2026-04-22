@@ -42,6 +42,22 @@ def test_extract_feedback_case_insensitive():
     assert "shorter" in fb
 
 
+def test_extract_feedback_inline_ignored():
+    """[FEEDBACK] inside backtick prose (describing past work) must not match."""
+    text = (
+        "[DONE] E2E test: rich payload (`[DONE]` + `[FEEDBACK]` + `## Dateien`"
+        " + `</summary>`) produced session_summary (clean, no XML, no feedback"
+        " inline, file list preserved) + feedback lesson."
+    )
+    assert _extract_feedback(text) is None
+
+
+def test_extract_feedback_no_bullets_rejected():
+    """[FEEDBACK] at line-start but body is prose without bullets → None."""
+    text = "Session topic: test\n[FEEDBACK]\nThis was a good session overall."
+    assert _extract_feedback(text) is None
+
+
 # ---------- _strip_feedback ----------
 
 

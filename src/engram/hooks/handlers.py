@@ -203,15 +203,15 @@ def handle_pre_compact() -> str:
 # --------------------------- PostCompact ---------------------------
 
 _FEEDBACK_RE = re.compile(
-    r"\[FEEDBACK\]\s*\n?(.*?)"
+    r"^\[FEEDBACK\]\s*\n?(.*?)"
     r"(?=\n\s*##|\n\s*\[(?:FACT|DECISION|INCIDENT|PREFERENCE)\]|\n\s*</\s*summary\s*>|\Z)",
-    re.DOTALL | re.IGNORECASE,
+    re.DOTALL | re.IGNORECASE | re.MULTILINE,
 )
 
 _FEEDBACK_STRIP_RE = re.compile(
-    r"\[FEEDBACK\]\s*\n?.*?"
+    r"^\[FEEDBACK\]\s*\n?.*?"
     r"(?=\n\s*##|\n\s*\[(?:FACT|DECISION|INCIDENT|PREFERENCE)\]|\n\s*</\s*summary\s*>|\Z)",
-    re.DOTALL | re.IGNORECASE,
+    re.DOTALL | re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -229,6 +229,10 @@ def _extract_feedback(text: str | None) -> str | None:
         return None
     body = m.group(1).strip()
     body = re.sub(r"</?\s*summary[^>]*>\s*$", "", body, flags=re.IGNORECASE).strip()
+    # Real feedback is bullet-formatted. Anything without bullets is narrative
+    # prose that happened to mention [FEEDBACK] inline (e.g. describing past work).
+    if not re.search(r"^[-*]\s", body, re.MULTILINE):
+        return None
     return body if body else None
 
 
