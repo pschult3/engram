@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from engram.retrieval.embeddings import reset_embedder
-from engram.retrieval.search import _rrf_fuse, search_memory
+from engram.retrieval.search import _cap_per_type, _rrf_fuse, search_memory
 from engram.storage import Store
 from engram.storage.models import MemoryType, MemoryUnit
 
@@ -126,3 +126,56 @@ def test_search_memory_top_k_respected(store: Store):
         _unit(store, MemoryType.fact, f"fact {i} pnpm", f"body about pnpm number {i}")
     hits = search_memory(store, "pnpm", top_k=3)
     assert len(hits) <= 3
+
+
+# ---------------------------------------------------------------------------
+# _cap_per_type
+# ---------------------------------------------------------------------------
+
+
+def _make_scored(store: Store, type_: MemoryType, n: int, score: float = 1.0) -> list[tuple[MemoryUnit, float]]:
+    return [
+        (_unit(store, type_, f"{type_.value} {i} pnpm", f"body {i}"), score)
+        for i in range(n)
+    ]
+
+
+def test_cap_per_type_limits_capped_type(store: Store):
+    scored = _make_scored(store, MemoryType.session_summary, 5)
+    result = _cap_per_type(scored, top_k=10, caps={MemoryType.session_summary: 2})
+    summary_count = sum(1 for u, _ in result if u.type == MemoryType.session_summary)
+    assert summary_count == 2
+
+
+def test_cap_per_type_uncapped_type_passes_through(store: Store):
+    scored = _make_scored(store, MemoryType.fact, 5)
+    result = _cap_per_type(scored, top_k=10, caps={MemoryType.session_summary: 2})
+    assert len(result) == 5
+
+
+def test_cap_per_type_top_k_still_respected(store: Store):
+    scored = _make_scored(store, MemoryType.fact, 10)
+    result = _cap_per_type(scored, top_k=3, caps={})
+    assert len(result) == 3
+
+
+def test_cap_per_type_mixed(store: Store):
+    summaries = _make_scored(store, MemoryType.session_summary, 4, score=0.9)
+    facts = _make_scored(store, MemoryType.fact, 4, score=0.8)
+    scored = sorted(summaries + facts, key=lambda x: x[1], reverse=True)
+    result = _cap_per_type(scored, top_k=8, caps={MemoryType.session_summary: 2})
+    summary_count = sum(1 for u, _ in result if u.type == MemoryType.session_summary)
+    fact_count = sum(1 for u, _ in result if u.type == MemoryType.fact)
+    assert summary_count == 2
+    assert fact_count == 4
+
+
+def test_search_memory_caps_session_summary(store: Store):
+    """search_memory applies session_summary cap=2 end-to-end."""
+    for i in range(5):
+        _unit(store, MemoryType.session_summary, f"session {i} pnpm", f"session summary about pnpm {i}")
+    _unit(store, MemoryType.decision, "pnpm decision", "standardized on pnpm workspaces")
+
+    hits = search_memory(store, "pnpm", top_k=8)
+    summary_count = sum(1 for u, _ in hits if u.type == MemoryType.session_summary)
+    assert summary_count <= 2

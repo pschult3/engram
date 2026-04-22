@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from engram.hooks.handlers import _extract_feedback, _strip_feedback, _FEEDBACK_TAG
+from engram.hooks.handlers import _extract_feedback, _is_low_signal_summary, _strip_feedback, _FEEDBACK_TAG
 from engram.storage import Store
 
 
@@ -56,6 +56,42 @@ def test_extract_feedback_no_bullets_rejected():
     """[FEEDBACK] at line-start but body is prose without bullets → None."""
     text = "Session topic: test\n[FEEDBACK]\nThis was a good session overall."
     assert _extract_feedback(text) is None
+
+
+# ---------- _is_low_signal_summary ----------
+
+
+def test_low_signal_none():
+    assert _is_low_signal_summary(None)
+
+
+def test_low_signal_empty():
+    assert _is_low_signal_summary("")
+
+
+def test_low_signal_short():
+    assert _is_low_signal_summary("too short")
+
+
+def test_low_signal_echo_only():
+    body = "Recent[what did we do?]\nRecent[continue the analysis]\n" + "x" * 100
+    assert _is_low_signal_summary(body)
+
+
+def test_low_signal_passes_with_done_marker():
+    body = (
+        "[DONE] Added _is_low_signal_summary to handlers.py and wired into "
+        "PostCompact and SessionEnd. All 141 tests pass with no regressions."
+    )
+    assert not _is_low_signal_summary(body)
+
+
+def test_low_signal_passes_long_no_recent():
+    body = (
+        "Session topic: Engram audit. Cleaned 41 rows via soft-delete, added "
+        "quality gates (_is_low_signal_summary), session idempotency, retrieval cap."
+    )
+    assert not _is_low_signal_summary(body)
 
 
 # ---------- _strip_feedback ----------

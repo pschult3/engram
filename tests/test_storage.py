@@ -73,3 +73,62 @@ def test_search_log(store: Store):
     rows = store.conn.execute("SELECT query, top_k, hit_ids FROM search_log").fetchall()
     assert len(rows) == 1
     assert rows[0][0] == "hello world"
+
+
+# ---------------------------------------------------------------------------
+# Session-summary idempotency
+# ---------------------------------------------------------------------------
+
+
+def _session_summary(store: Store, session_id: str, body: str = None) -> MemoryUnit:
+    u = MemoryUnit(
+        id=uuid.uuid4().hex[:12],
+        project=store.project,
+        type=MemoryType.session_summary,
+        title=f"session {session_id[:8]}",
+        body=body or f"Summary for session {session_id} with enough content to pass quality gate.",
+        source_refs=[f"session:{session_id}"],
+        tags=["session"],
+    )
+    store.upsert_memory(u)
+    return u
+
+
+def test_session_summary_idempotency_retires_prior(store: Store):
+    sid = "idem-session-001"
+    # Different bodies so checksum dedup doesn't fire before idempotency block.
+    u1 = _session_summary(store, sid, "First compact summary for this session with unique content A.")
+    u2 = _session_summary(store, sid, "Second compact summary for this session with unique content B.")
+
+    active = store.list_memory(types=[MemoryType.session_summary])
+    assert len(active) == 1
+    assert active[0].id == u2.id
+
+    row = store.conn.execute(
+        "SELECT valid_to FROM memory_units WHERE id=?", [u1.id]
+    ).fetchone()
+    assert row is not None and row[0] is not None
+
+
+def test_session_summary_different_sessions_both_active(store: Store):
+    _session_summary(store, "sess-aaa")
+    _session_summary(store, "sess-bbb")
+    active = store.list_memory(types=[MemoryType.session_summary])
+    assert len(active) == 2
+
+
+def test_fact_not_retired_by_session_idempotency(store: Store):
+    sid = "idem-session-002"
+    for i in range(2):
+        u = MemoryUnit(
+            id=uuid.uuid4().hex[:12],
+            project=store.project,
+            type=MemoryType.fact,
+            title=f"fact {i}",
+            body=f"body {i}",
+            source_refs=[f"session:{sid}"],
+            tags=["fact"],
+        )
+        store.upsert_memory(u)
+    active = store.list_memory(types=[MemoryType.fact])
+    assert len(active) == 2
