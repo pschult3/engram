@@ -142,7 +142,10 @@ commands executed) from what was only DISCUSSED (ideas, plans, hypotheticals).
 3. For [DONE] items include: file paths, what changed, test results if any.
 4. Keep the summary under 800 words.
 5. Do NOT wrap the summary in <analysis> or <summary> XML tags — plain text only.
-6. Start with a one-line session topic, then list items.
+6. Start with a one-line session topic, then list items. If this session was \
+resumed from a prior compacted context, synthesize the work of BOTH the \
+original and resumed session into a single coherent topic — do NOT copy or \
+echo the "This session is being continued..." preamble as the topic.
 7. If memories retrieved earlier in this session were misleading, too verbose, \
 or missing critical info, you MAY append a [FEEDBACK] section (1-3 bullets) \
 describing what future summaries should do differently. Only add feedback when \
