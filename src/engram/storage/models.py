@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _now() -> str:
@@ -30,6 +30,9 @@ class MemoryType(str, Enum):
     lesson = "lesson"
 
 
+_LESSON_BODY_CAP = 400
+
+
 class MemoryUnit(BaseModel):
     id: str
     project: str
@@ -44,6 +47,18 @@ class MemoryUnit(BaseModel):
     valid_to: str | None = None
     confidence: float = 0.8
     checksum: str | None = None
+
+    @field_validator("body")
+    @classmethod
+    def _cap_lesson_body(cls, v: str, info):
+        # Keep lesson bodies concise (CLAUDE.md: 2-3 sentences). Other types
+        # (esp. facts with a trailing "Verified: ..." source) stay intact.
+        if info.data.get("type") != MemoryType.lesson or len(v) <= _LESSON_BODY_CAP:
+            return v
+        cut = v[:_LESSON_BODY_CAP]
+        boundary = max(cut.rfind(". "), cut.rfind(".\n"), cut.rfind("; "), cut.rfind("\n"))
+        cut = cut[: boundary + 1] if boundary >= int(_LESSON_BODY_CAP * 0.6) else cut.rstrip()
+        return cut.rstrip() + " …"
 
 
 class Event(BaseModel):

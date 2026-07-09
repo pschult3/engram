@@ -170,6 +170,20 @@ Same format for [INCIDENT] and [PREFERENCE]. If nothing verified → omit entire
 _FEEDBACK_TAG = "memory_feedback"
 
 
+def _feedback_title(feedback: str) -> str:
+    """Derive a distinct, searchable title from the feedback body.
+
+    A shared literal title ("compact feedback") collides in FTS across every
+    session; the first meaningful line makes each unit findable.
+    """
+    first = next(
+        (ln.strip(" -*\t") for ln in feedback.splitlines() if ln.strip(" -*\t")),
+        "",
+    )
+    first = re.sub(r"\s+", " ", first)
+    return f"feedback: {first[:60]}" if first else "compact feedback"
+
+
 def handle_pre_compact() -> str:
     """Inject compact formatting instructions + past feedback.
 
@@ -370,7 +384,7 @@ def handle_post_compact() -> dict[str, Any]:
                 id=uuid.uuid4().hex[:12],
                 project=store.project,
                 type=MemoryType.lesson,
-                title="compact feedback",
+                title=_feedback_title(feedback),
                 body=feedback,
                 tags=[_FEEDBACK_TAG],
                 source_refs=[f"session:{session_id}"],
@@ -421,7 +435,7 @@ def handle_session_end() -> dict[str, Any]:
                 id=uuid.uuid4().hex[:12],
                 project=store.project,
                 type=MemoryType.lesson,
-                title="compact feedback",
+                title=_feedback_title(feedback),
                 body=feedback,
                 tags=[_FEEDBACK_TAG],
                 source_refs=[f"session:{session_id}"],
