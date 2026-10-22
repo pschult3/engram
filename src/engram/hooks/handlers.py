@@ -91,9 +91,9 @@ def handle_user_prompt_submit() -> str:
     store, queue = _open_store()
     try:
         drain_queue(store, queue)
-        hits = search_memory(store, prompt, top_k=6)
-        store.log_search(prompt, 6, [u.id for u, _ in hits])
-        return rank_for_prompt(hits)
+        hits = search_memory(store, prompt, top_k=3)
+        store.log_search(prompt, 3, [u.id for u, _ in hits])
+        return rank_for_prompt(hits, max_chars=600)
     finally:
         store.close()
 
