@@ -64,3 +64,15 @@ def test_failing_command_kept_as_failure():
 def test_unrelated_tool_dropped():
     assert events_from_tool_call("Read", {"file_path": "x"}, {}) == []
     assert events_from_tool_call("Grep", {"pattern": "foo"}, {}) == []
+
+
+def test_session_summary_title_states_the_finding_not_the_session_id():
+    from engram.ingest.extractor import summarize_session
+
+    unit = summarize_session(
+        "p", "a3db0e40-ec7d", [],
+        compact_summary="Session topic: vkorg 2000 plan is USD, not EUR. Checked in BQ.\nDetails follow.",
+    )
+    assert unit.title == "vkorg 2000 plan is USD, not EUR"
+    long = summarize_session("p", "a3db0e40", [], compact_summary="x" * 300)
+    assert len(long.title) == 80 and long.title.endswith("…")

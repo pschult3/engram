@@ -176,6 +176,12 @@ def _clean_summary(text: str) -> str:
     return text
 
 
+def _title_from_body(body: str, limit: int = 80) -> str:
+    """The body's first sentence, so the title states the finding, not the container."""
+    first = body.strip().split("\n", 1)[0].removeprefix("Session topic:").split(". ", 1)[0].strip()
+    return first if len(first) <= limit else first[: limit - 1].rstrip() + "…"
+
+
 def summarize_session(
     project: str,
     session_id: str,
@@ -207,7 +213,7 @@ def summarize_session(
         id=_uid(),
         project=project,
         type=MemoryType.session_summary,
-        title=f"session {session_id[:8]}",
+        title=_title_from_body(body) or f"session {session_id[:8]}",
         body=body,
         source_refs=[f"session:{session_id}"],
         tags=["session"],
